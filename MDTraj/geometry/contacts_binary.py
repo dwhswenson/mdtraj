@@ -9,6 +9,7 @@ import math
 from mdtraj.utils import ensure_type
 from mdtraj.geometry import _geometry
 from mdtraj.core import element
+import mdtraj as md
 import itertools
 
 class CellDecomposition(object):
@@ -51,10 +52,11 @@ class CellDecomposition(object):
             # create fake box vectors based on min/max x,y,z; create an
             # empty shell around the whole thing (by adding 1 to the number
             # of subcells in each direction) so we ignore periodicity
+            # TODO
             pass
 
         self.hinv = np.linalg.inv(boxvectors)
-        self.hx = 1 # TODO: this is only for cubic
+        hx = [] 
 
         # split the box vectors into subcells
         self.ncells = []
@@ -62,11 +64,20 @@ class CellDecomposition(object):
         for d in range(3):
             # TODO: check that the box height uses correct shape (doesn't
             # matter for cubic boxes, but will matter in general
+            hx.append(boxvectors[d,:]/np.linalg.norm(boxvectors[d,:]))
             self.boxheights.append(1.0/np.linalg.norm(self.hinv[d,:]))
             self.ncells.append(int(self.boxheights[d] / self.maxdist))
         self.cellvectors = boxvectors / self.ncells
         self.cell_abc = [np.linalg.norm(self.cellvectors[d,:]) 
                             for d in range(3)]
+        self.hx = np.array(hx)
+
+        print boxvectors
+        print self.cell_abc
+        print self.hx
+        print self.boxheights
+        print self.ncells
+        print "-------"
                             
 
 
@@ -93,7 +104,7 @@ class CellDecomposition(object):
         for atom_i in group_atoms:
             pos = xyz[0][atom_i]
             # convert xyz coordinates to abc coordinates
-            abc = self.hx*pos
+            abc = np.dot(self.hx,pos)
             # assign that to a box
             boxnum = []
             for d in range(3):
@@ -146,9 +157,8 @@ def cellwrap(cellid, ncells):
     return cellid
 
 
-def compute_contacts_binary(traj, groups, scheme='closest-heavy',
-                            maxdist=None, 
-                            celldecomp=None, output='residues'):
+def neighbor_atoms(traj, groups, scheme='closest-heavy', maxdist=None, 
+                    celldecomp=None):
     """Compute distances for contacts only if distance is closer than a
     given value.
 
@@ -172,7 +182,7 @@ def compute_contacts_binary(traj, groups, scheme='closest-heavy',
     Returns
     -------
     distances :
-    residue_pairs :
+    atom_pairs : 
 
     Examples
     --------
@@ -186,8 +196,6 @@ def compute_contacts_binary(traj, groups, scheme='closest-heavy',
     if traj.topology is None:
         raise ValueError('Binary contacts requires a topology')
 
-
-
     scheme_atoms = { 'ca':'ca', 'closest-heavy':'heavy', 'closest':'all'}
 
     # default maxdist for different atom types
@@ -196,6 +204,7 @@ def compute_contacts_binary(traj, groups, scheme='closest-heavy',
                     'ca' : 1.0, 'closest-heavy' : 0.6, 'closest':0.3
                   }[scheme]
 
+    n_naive_dist = len(groups[0])*len(groups[1]) # DEBUG (efficiency)
     for frame in traj:
         if not celldecomp:
             celldecomp = CellDecomposition(frame,maxdist,scheme_atoms[scheme])
@@ -231,13 +240,60 @@ def compute_contacts_binary(traj, groups, scheme='closest-heavy',
                         raise ValueError('WTF? sizeorder is wonky')
         
         # TODO: from here we might change things to speed it up in various
-        # circumstances; e.g., if we want a simple yes/no on residue-residue
-        # interactions ... the above might be a separate fcn
+        # circumstances. In particular, if we just want a simple yes/no on
+        # residue contact we skip atom pairs if their residues have already
+        # be id'd as in contact
 
         # make the atom-atom pairs from the relevant cell pairs
         distance_pairs = []
         for pair in cellpairs:
+            # option to reduce memory usage: send distance_pairs off to be
+            # calculated if a certain number of pairs are generated; then
+            # reset distance_pairs
             distance_pairs.extend( itertools.product(
                     celldecomp.cells_atoms['group0'][pair[0]],
                     celldecomp.cells_atoms['group1'][pair[1]] ) )
-        
+
+        ndist = len(distance_pairs)
+
+        atom_distances = md.compute_distances(frame, distance_pairs)[0]
+
+        # TODO: this zipping/unzipping is probably slower/more memory
+        # intensive than direct iteration
+        atom_pairs, distances = zip(*[(pair,dist) for pair,dist in 
+                                    zip(distance_pairs, atom_distances) 
+                                    if dist < maxdist])
+        return distances, atom_pairs
+
+def filter_atompairs_to_residuepairs(top, atom_pairs, values, order='min'):
+    sgn = { 'min' : 1 , 'max' : -1 }[order]
+    res_dict = {}
+    for (pair, val) in zip(atom_pairs, values):
+        respair = ( top.atom(pair[0]).residue.index, 
+                    top.atom(pair[1]).residue.index )
+        if not (respair in res_dict and res_dict[respair] < sgn*val):
+            res_dict[respair] = val
+
+    return zip(*[(v,r) for r,v in res_dict.iteritems()])
+
+def filter_duplicate_residues(res_pairs, values, partner=0, order='min'):
+    sgn = { 'min' : 1 , 'max' : -1 }[order]
+    res_dict = {}
+    for (pair, val) in zip(res_pairs, values):
+        myres = pair[partner]
+        if not (myres in res_dict and res_dict[myres][0] < sgn*val):
+            res_dict[myres] = (val, pair)
+    return zip(*res_dict.values())
+
+def neighbor_residues(traj, groups, scheme='closest-heavy', maxdist=None,
+                        celldecomp=None):
+    """ Determines minimum distance """
+    atom_dists, atom_pairs = neighbor_atoms(traj, groups, scheme, 
+                                            maxdist, celldecomp)
+    res_dists, res_pairs = filter_atompairs_to_residuepairs(traj.top, 
+                                            atom_pairs, atom_dists)
+    return res_dists, res_pairs
+
+    # this next line would have provided above with nearest member from
+    # group B to each member of group A (e.g, nearest water to each residue)
+    #final_dists, final_pairs = filter_duplicate_residues(res_pairs,res_dists)

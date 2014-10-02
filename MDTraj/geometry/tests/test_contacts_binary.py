@@ -12,7 +12,7 @@ import mdtraj as md
 # TODO: early testing -- eventually this should not be needed
 import sys
 sys.path.append("..")
-from contacts_binary import CellDecomposition,compute_contacts_binary
+from contacts_binary import CellDecomposition,neighbor_atoms,neighbor_residues
 
 
 # TESTS TO RUN
@@ -23,14 +23,21 @@ from contacts_binary import CellDecomposition,compute_contacts_binary
 
 def test_contacts_binary_0():
     #traj = md.load( get_fn('1am7_corrected.xtc'), 
-                    #top=get_fn('1am7_protein.pdb') )
+    #                top=get_fn('1am7_protein.pdb') )
     #traj = md.load( get_fn('1vii_sustiva_water.pdb') )
     traj = md.load( get_fn('alanine-dipeptide-explicit.pdb') )
+
+    frame = traj[0]
+    #a = np.array([1,0,0])
+    #b = np.array([1,1,0])
+    #c = np.array([0,0,1])
+    #frame.unitcell_vectors = np.array([ [ a, b, c] ])
+    #cell0 = CellDecomposition(frame, 0.3)
 
     waters = [r.index for r in traj.top.residues if r.name == "HOH"]
     protein = [r.index for r in traj.top.chain(0).residues 
                             if r.name != "HOH" ]
-    compute_contacts_binary(traj[0], [waters,protein])
+    neighbor_residues(traj[0], [protein,waters])
 
 
     
