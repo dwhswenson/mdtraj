@@ -72,14 +72,6 @@ class CellDecomposition(object):
                             for d in range(3)]
         self.hx = np.array(hx)
 
-        print boxvectors
-        print self.cell_abc
-        print self.hx
-        print self.boxheights
-        print self.ncells
-        print "-------"
-                            
-
 
     def assign(self, grouplabel, group):
         """
@@ -156,9 +148,81 @@ def cellwrap(cellid, ncells):
         cellid += ncells
     return cellid
 
+def neighbor_atoms_frame(frame, groups, maxdist=None, scheme='closest-heavy'):
+    # TODO: raise error if groups is of length!=2
+    scheme_atoms = { 'ca':'ca', 'closest-heavy':'heavy', 'closest':'all'}
+    # default maxdist for different atom types
+    if maxdist==None:
+        maxdist = { 
+                    'ca' : 1.0, 'closest-heavy' : 0.6, 'closest':0.3
+                  }[scheme]
 
-def neighbor_atoms(traj, groups, scheme='closest-heavy', maxdist=None, 
-                    celldecomp=None):
+    celldecomp = CellDecomposition(frame,maxdist,scheme_atoms[scheme])
+
+    if celldecomp.types != scheme_atoms[scheme]:
+        pass # raise error? warning?
+    celldecomp.assign('group0', groups[0])
+    celldecomp.assign('group1', groups[1])
+    cells0 = celldecomp.cells_atoms['group0'].keys()
+    cells1 = celldecomp.cells_atoms['group1'].keys()
+    # set the loop to go over the smaller group (autopick query/haystack)
+    # [sometimes my codes just hypnotize me]
+    if len(cells0) > len(cells1):
+        biggie = cells0
+        smalls = cells1
+        sizeorder = 1
+        # sizeorder lets us match the groups back to the right order
+    else:
+        biggie = cells1
+        smalls = cells0
+        sizeorder = -1
+    cellpairs = []
+    for cell in smalls:
+        neighborhood = celldecomp.neighborhood(cell)
+        # check if the biggie is chillin' in smalls' hood; add cells to
+        # list if so
+        for neighb in neighborhood:
+            if neighb in biggie:
+                if sizeorder==1:
+                    cellpairs.append([neighb, cell])
+                elif sizeorder==-1:
+                    cellpairs.append([cell,neighb])
+                else:
+                    raise ValueError('WTF? sizeorder is wonky')
+    
+    # TODO: from here we might change things to speed it up in various
+    # circumstances. In particular, if we just want a simple yes/no on
+    # residue contact we skip atom pairs if their residues have already
+    # be id'd as in contact
+
+    # make the atom-atom pairs from the relevant cell pairs
+    distance_pairs = []
+    for pair in cellpairs:
+        # option to reduce memory usage: send distance_pairs off to be
+        # calculated if a certain number of pairs are generated; then
+        # reset distance_pairs
+
+        # TODO: except in particular circumstances, we'll want to prevent
+        # pairs from the same residue (possibly neighboring residues) from
+        # being added, as well. But may be faster to just calc all the
+        # distances and filter those after selecting the ones that are close
+        # enough to matter (fewer branches).
+        distance_pairs.extend( itertools.product(
+                celldecomp.cells_atoms['group0'][pair[0]],
+                celldecomp.cells_atoms['group1'][pair[1]] ) )
+
+
+    atom_distances = md.compute_distances(frame, distance_pairs)[0]
+
+    # TODO: this zipping/unzipping is probably slower/more memory
+    # intensive than direct iteration
+    f_atom_pairs, f_distances = zip(*[(pair,dist) for pair,dist in 
+                                zip(distance_pairs, atom_distances) 
+                                if dist < maxdist])
+    return f_distances, f_atom_pairs
+
+
+def neighbor_atoms(traj, groups, maxdist=None, scheme='closest-heavy'):
     """Compute distances for contacts only if distance is closer than a
     given value.
 
@@ -196,74 +260,18 @@ def neighbor_atoms(traj, groups, scheme='closest-heavy', maxdist=None,
     if traj.topology is None:
         raise ValueError('Binary contacts requires a topology')
 
-    scheme_atoms = { 'ca':'ca', 'closest-heavy':'heavy', 'closest':'all'}
-
-    # default maxdist for different atom types
-    if maxdist==None:
-        maxdist = { 
-                    'ca' : 1.0, 'closest-heavy' : 0.6, 'closest':0.3
-                  }[scheme]
-
-    n_naive_dist = len(groups[0])*len(groups[1]) # DEBUG (efficiency)
+    atom_pairs = []
+    distances = []
+    nframe=0
     for frame in traj:
-        if not celldecomp:
-            celldecomp = CellDecomposition(frame,maxdist,scheme_atoms[scheme])
-        if celldecomp.types != scheme_atoms[scheme]:
-            pass # raise error? warning?
-        # TODO: come up with a way to speed up assign based on previous
-        # frame, probably something Verlet list-based
-        celldecomp.assign('group0', groups[0])
-        celldecomp.assign('group1', groups[1])
-        cells0 = celldecomp.cells_atoms['group0'].keys()
-        cells1 = celldecomp.cells_atoms['group1'].keys()
-        # loop over the smaller group; sometimes my codes just hypnotize me
-        if len(cells0) > len(cells1):
-            biggie = cells0
-            smalls = cells1
-            sizeorder = 1
-        else:
-            biggie = cells1
-            smalls = cells0
-            sizeorder = -1
-        cellpairs = []
-        for cell in smalls:
-            neighborhood = celldecomp.neighborhood(cell)
-            # check if the biggie is chillin' in smalls' hood; add cells to
-            # list if so
-            for neighb in neighborhood:
-                if neighb in biggie:
-                    if sizeorder==1:
-                        cellpairs.append([neighb, cell])
-                    elif sizeorder==-1:
-                        cellpairs.append([cell,neighb])
-                    else:
-                        raise ValueError('WTF? sizeorder is wonky')
-        
-        # TODO: from here we might change things to speed it up in various
-        # circumstances. In particular, if we just want a simple yes/no on
-        # residue contact we skip atom pairs if their residues have already
-        # be id'd as in contact
+        nframe += 1
+        print "Starting frame", nframe
+        f_distances,f_atom_pairs = neighbor_atoms_frame(frame, groups,
+                                                        scheme, maxdist)
+        atom_pairs.append(f_atom_pairs)
+        distances.append(f_distances)
 
-        # make the atom-atom pairs from the relevant cell pairs
-        distance_pairs = []
-        for pair in cellpairs:
-            # option to reduce memory usage: send distance_pairs off to be
-            # calculated if a certain number of pairs are generated; then
-            # reset distance_pairs
-            distance_pairs.extend( itertools.product(
-                    celldecomp.cells_atoms['group0'][pair[0]],
-                    celldecomp.cells_atoms['group1'][pair[1]] ) )
-
-        ndist = len(distance_pairs)
-
-        atom_distances = md.compute_distances(frame, distance_pairs)[0]
-
-        # TODO: this zipping/unzipping is probably slower/more memory
-        # intensive than direct iteration
-        atom_pairs, distances = zip(*[(pair,dist) for pair,dist in 
-                                    zip(distance_pairs, atom_distances) 
-                                    if dist < maxdist])
-        return distances, atom_pairs
+    return distances, atom_pairs
 
 def filter_atompairs_to_residuepairs(top, atom_pairs, values, order='min'):
     sgn = { 'min' : 1 , 'max' : -1 }[order]
@@ -273,7 +281,6 @@ def filter_atompairs_to_residuepairs(top, atom_pairs, values, order='min'):
                     top.atom(pair[1]).residue.index )
         if not (respair in res_dict and res_dict[respair] < sgn*val):
             res_dict[respair] = val
-
     return zip(*[(v,r) for r,v in res_dict.iteritems()])
 
 def filter_duplicate_residues(res_pairs, values, partner=0, order='min'):
@@ -285,13 +292,27 @@ def filter_duplicate_residues(res_pairs, values, partner=0, order='min'):
             res_dict[myres] = (val, pair)
     return zip(*res_dict.values())
 
-def neighbor_residues(traj, groups, scheme='closest-heavy', maxdist=None,
-                        celldecomp=None):
+def neighbor_residues(traj, groups, maxdist=None, scheme='closest-heavy'):
     """ Determines minimum distance """
-    atom_dists, atom_pairs = neighbor_atoms(traj, groups, scheme, 
-                                            maxdist, celldecomp)
-    res_dists, res_pairs = filter_atompairs_to_residuepairs(traj.top, 
-                                            atom_pairs, atom_dists)
+    res_dists = []
+    res_pairs = []
+    atomgroup0 = []
+    atomgroup1 = []
+    for r in groups[0]:
+        atomgroup0.extend( [a.index for a in traj.top.residue(r).atoms] )
+    for r in groups[1]:
+        atomgroup1.extend( [a.index for a in traj.top.residue(r).atoms] )
+    fnum=0
+    for frame in traj:
+        fnum += 1
+        print "Starting frame", fnum
+        atom_dists, atom_pairs = neighbor_atoms_frame(frame, 
+                                                    [atomgroup0,atomgroup1],
+                                                    maxdist, scheme)
+        f_res_dists, f_res_pairs = filter_atompairs_to_residuepairs(traj.top, 
+                                                atom_pairs, atom_dists)
+        res_dists.append(f_res_dists)
+        res_pairs.append(f_res_pairs)
     return res_dists, res_pairs
 
     # this next line would have provided above with nearest member from
