@@ -37,8 +37,14 @@ def test_contacts_binary_0():
     waters = [r.index for r in traj.top.residues if r.name == "HOH"]
     protein = [r.index for r in traj.top.chain(0).residues 
                             if r.name != "HOH" ]
-    neighbor_residues(traj[0], [protein,waters])
+    n_dist, n_pairs = neighbor_residues(traj[0], [protein,waters])
+    c_dist, c_pairs = md.compute_contacts(
+                                traj,
+                                list(itertools.product(protein, waters)))
 
+    cps = [cp for (cp, cd) in zip(c_pairs, c_dist[0]) if cd<0.6]
+    cds = [cd for (cp, cd) in zip(c_pairs, c_dist[0]) if cd<0.6]
+    print (len(n_pairs[0]), len(cps))
 
     
 

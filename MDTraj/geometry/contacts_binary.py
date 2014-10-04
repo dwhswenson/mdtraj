@@ -57,6 +57,7 @@ class CellDecomposition(object):
 
         self.hinv = np.linalg.inv(boxvectors)
         hx = [] 
+        hinvx = []
 
         # split the box vectors into subcells
         self.ncells = []
@@ -65,17 +66,26 @@ class CellDecomposition(object):
             # TODO: check that the box height uses correct shape (doesn't
             # matter for cubic boxes, but will matter in general
             hx.append(boxvectors[d,:]/np.linalg.norm(boxvectors[d,:]))
+            hinvx.append(self.hinv[d,:]/np.linalg.norm(self.hinv[d,:]))
             self.boxheights.append(1.0/np.linalg.norm(self.hinv[d,:]))
             self.ncells.append(int(self.boxheights[d] / self.maxdist))
         self.cellvectors = boxvectors / self.ncells
         self.cell_abc = [np.linalg.norm(self.cellvectors[d,:]) 
                             for d in range(3)]
-        self.hx = np.array(hx)
+        self.hx = np.array(hx).T
+        self.hinvx = np.array(hinvx).T
+        #print boxvectors
+        #print self.ncells
+        #print self.cellvectors
+        #print self.hx
+        #print self.hinvx
+
 
 
     def assign(self, grouplabel, group):
         """
-        Assigns (or reassigns) a group of atoms to the appropriate cells. 
+        Assigns (or reassigns) atoms from a group of residue indices to the
+        appropriate cells. 
         """
         cells = {}
         xyz = ensure_type(self.frame.xyz, dtype=np.float32, ndim=3,
@@ -95,14 +105,7 @@ class CellDecomposition(object):
         # take the xyz of each atom and assign it to a cell
         for atom_i in group_atoms:
             pos = xyz[0][atom_i]
-            # convert xyz coordinates to abc coordinates
-            abc = np.dot(self.hx,pos)
-            # assign that to a box
-            boxnum = []
-            for d in range(3):
-                num = abc[d] / self.cell_abc[d] // 1
-                num = cellwrap(num, self.ncells[d])
-                boxnum.append(num)
+            boxnum = self.cell_for_position(pos)
             # Use the tuple of the box number as a dictionary key for the
             # box. This is convenient for python tricks, and also means that
             # we only store grid boxes that we actually use.
@@ -112,6 +115,19 @@ class CellDecomposition(object):
                 cells[tuple(boxnum)] = [atom_i]
 
         self.cells_atoms[grouplabel] = cells
+ 
+    def cell_for_position(self, pos):
+        # convert xyz coordinates to abc coordinates
+        #abc = np.dot(self.hx,pos)
+        abc = np.dot(self.hinvx,pos)
+        # assign that to a box
+        boxnum = []
+        for d in range(3):
+            num = abc[d] / self.cell_abc[d] // 1
+            num = cellwrap(num, self.ncells[d])
+            boxnum.append(num)
+        return tuple(boxnum)
+
 
 
     def neighborhood(self,cellid):
@@ -197,6 +213,7 @@ def neighbor_atoms_frame(frame, groups, maxdist=None, scheme='closest-heavy'):
 
     # make the atom-atom pairs from the relevant cell pairs
     distance_pairs = []
+    #print cellpairs
     for pair in cellpairs:
         # option to reduce memory usage: send distance_pairs off to be
         # calculated if a certain number of pairs are generated; then
@@ -214,11 +231,40 @@ def neighbor_atoms_frame(frame, groups, maxdist=None, scheme='closest-heavy'):
 
     atom_distances = md.compute_distances(frame, distance_pairs)[0]
 
+    for (p,d) in zip(distance_pairs, atom_distances):
+        pos0, pos1 = (frame.xyz[0,p[0],:], frame.xyz[0,p[1],:])
+        #print "neighbors:", p,d
+        #print "  ", pos0, celldecomp.cell_for_position(pos0)
+        #print "  ", pos1, celldecomp.cell_for_position(pos1)
+
+    testpair = (257, 1678)
+    pos0 = frame.xyz[0,testpair[0],:]
+    pos1 = frame.xyz[0,testpair[1],:]
+    #print "Test for pair", testpair, md.compute_distances(frame, [testpair])
+    #print "   ", pos0, celldecomp.cell_for_position(pos0)
+    #print "   ", pos1, celldecomp.cell_for_position(pos1)
+    #print "       ", np.dot(celldecomp.hx.T,pos1)
+
+    n0=0
+    for cell in cells0:
+        n0+=len(celldecomp.cells_atoms['group0'][cell])
+    n1=0
+    for cell in cells1:
+        n1+=len(celldecomp.cells_atoms['group1'][cell])
+    #print n0,n1
+
     # TODO: this zipping/unzipping is probably slower/more memory
     # intensive than direct iteration
-    f_atom_pairs, f_distances = zip(*[(pair,dist) for pair,dist in 
-                                zip(distance_pairs, atom_distances) 
-                                if dist < maxdist])
+    zipped=[(pair,dist) for pair,dist in zip(distance_pairs, atom_distances) 
+                        if dist < maxdist]
+    #print "Distances:", len(distance_pairs), "/",
+    #print len(groups[0])*len(groups[1]), len(zipped)
+    if len(zipped) > 0:
+        f_atom_pairs, f_distances = zip(*zipped)
+    else:
+        f_atom_pairs = []
+        f_distances = []
+
     return f_distances, f_atom_pairs
 
 
@@ -296,21 +342,26 @@ def neighbor_residues(traj, groups, maxdist=None, scheme='closest-heavy'):
     """ Determines minimum distance """
     res_dists = []
     res_pairs = []
-    atomgroup0 = []
-    atomgroup1 = []
-    for r in groups[0]:
-        atomgroup0.extend( [a.index for a in traj.top.residue(r).atoms] )
-    for r in groups[1]:
-        atomgroup1.extend( [a.index for a in traj.top.residue(r).atoms] )
+    #atomgroup0 = []
+    #atomgroup1 = []
+    #for r in groups[0]:
+    #    atomgroup0.extend( [a.index for a in traj.top.residue(r).atoms] )
+    #for r in groups[1]:
+    #    atomgroup1.extend( [a.index for a in traj.top.residue(r).atoms] )
     fnum=0
     for frame in traj:
         fnum += 1
-        print "Starting frame", fnum
+        #print "Starting frame", fnum
         atom_dists, atom_pairs = neighbor_atoms_frame(frame, 
-                                                    [atomgroup0,atomgroup1],
+                                                    groups,
                                                     maxdist, scheme)
-        f_res_dists, f_res_pairs = filter_atompairs_to_residuepairs(traj.top, 
-                                                atom_pairs, atom_dists)
+        if atom_dists!=[]:
+            f_res_dists, f_res_pairs = filter_atompairs_to_residuepairs(
+                                                traj.top, atom_pairs, 
+                                                atom_dists)
+        else:
+            f_res_dists = []
+            f_res_pairs = []
         res_dists.append(f_res_dists)
         res_pairs.append(f_res_pairs)
     return res_dists, res_pairs
@@ -318,3 +369,4 @@ def neighbor_residues(traj, groups, maxdist=None, scheme='closest-heavy'):
     # this next line would have provided above with nearest member from
     # group B to each member of group A (e.g, nearest water to each residue)
     #final_dists, final_pairs = filter_duplicate_residues(res_pairs,res_dists)
+
