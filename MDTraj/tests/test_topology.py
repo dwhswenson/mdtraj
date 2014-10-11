@@ -57,6 +57,11 @@ def test_topology_openmm():
     topology2 = md.Topology.from_openmm(mm)
     eq(topology, topology2)
 
+@skipif(not HAVE_OPENMM)
+def test_topology_openmm_arbitrary_atoms():
+    #TODO
+    pass
+
 
 @skipif(not HAVE_OPENMM)
 def test_topology_openmm_boxes():

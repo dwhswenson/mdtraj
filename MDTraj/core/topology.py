@@ -280,6 +280,8 @@ class Topology(object):
             for residue in chain.residues:
                 r = out.addResidue(residue.name, c)
                 for atom in residue.atoms:
+                    # TODO: check for existence of atom.element.symbol in
+                    # appropriate dictionary: use a try: except(KeyError):
                     a = out.addAtom(atom.name, app.Element.getBySymbol(atom.element.symbol), r)
                     atom_mapping[atom] = a
 
@@ -321,6 +323,8 @@ class Topology(object):
             for residue in chain.residues():
                 r = out.add_residue(residue.name, c)
                 for atom in residue.atoms():
+                    # TODO: check for existence of atom.element.symbol in
+                    # appropriate dictionary: use a try: except(KeyError):
                     a = out.add_atom(atom.name, elem.get_by_symbol(atom.element.symbol), r)
                     atom_mapping[atom] = a
 
