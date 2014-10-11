@@ -35,6 +35,11 @@ try:
 except ImportError:
     HAVE_OPENMM = False
 
+try:
+    from simtk.unit import amu
+    HAVE_SIMTKUNIT = True
+except ImportError:
+    HAVE_SIMTKUNIT = False
 
 try:
     import pandas as pd
@@ -58,9 +63,51 @@ def test_topology_openmm():
     eq(topology, topology2)
 
 @skipif(not HAVE_OPENMM)
-def test_topology_openmm_arbitrary_atoms():
-    #TODO
-    pass
+def test_topology_to_openmm_arbitrary_atoms():
+    topology = md.Topology()
+    elemA = md.element.Element(1, "LJ_A", "A", 1.0)
+    elemX = md.element.Element(2, "LJ_X", "X", 2.0)
+    c1 = topology.add_chain()
+    c2 = topology.add_chain()
+    # chain 1 consists of 2 residues, AAX-AXA
+    # chain 2 consists of 3 residues, AXA-XXAX-AA
+    r1 = topology.add_residue("AAX", c1, 1)
+    r2 = topology.add_residue("AXA", c1, 2)
+    r3 = topology.add_residue("AXA", c2, 3)
+    r4 = topology.add_residue("XXAX", c2, 4)
+    r5 = topology.add_residue("AA", c2, 5)
+    num = 1
+    for res in [r1, r2, r3, r4, r5]:
+        for a in res.name:
+            element = md.element.Element.getBySymbol(a)
+            topology.add_atom(a+str(num), element, res)
+            num += 1
+    openmm_topology = topology.to_openmm()
+    mdtraj_topology = topology.from_openmm(openmm_topology)
+    eq(topology, mdtraj_topology)
+
+@skipif(not (HAVE_OPENMM and HAVE_SIMTKUNIT))
+def test_topology_from_openmm_arbitrary_atoms():
+    # same as above, except we start out with the openmm topology
+    topology = app.Topology()
+    elemA = app.element.Element(1, "LJ_A", "A", 1.0 * amu)
+    elemX = app.element.Element(2, "LJ_X", "X", 2.0 * amu)
+    c1 = topology.addChain()
+    c2 = topology.addChain()
+    r1 = topology.addResidue("AAX", c1)
+    r2 = topology.addResidue("AXA", c1)
+    r3 = topology.addResidue("AXA", c2)
+    r4 = topology.addResidue("XXAX", c2)
+    r5 = topology.addResidue("AA", c2)
+    num = 1
+    for res in [r1, r2, r3, r4, r5]:
+        for a in res.name:
+            element = app.element.Element.getBySymbol(a)
+            topology.addAtom(a+str(num), element, res)
+            num += 1
+    mdtraj_topology = md.Topology.from_openmm(topology)
+    openmm_topology = mdtraj_topology.to_openmm()
+    eq(topology, openmm_topology)
 
 
 @skipif(not HAVE_OPENMM)
